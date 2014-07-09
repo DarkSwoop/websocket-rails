@@ -112,14 +112,16 @@ module WebsocketRails
     end
 
     def trigger_incoming(event)
-      case
-      when event.is_channel?
-        WebsocketRails[event.channel].trigger_event(event)
-      when event.is_user?
-        connection = WebsocketRails.users[event.user_id.to_s]
-        return if connection.nil?
-        connection.trigger event
-      end
+      Fiber.new do
+        case
+        when event.is_channel?
+          WebsocketRails[event.channel].trigger_event(event)
+        when event.is_user?
+          connection = WebsocketRails.users[event.user_id.to_s]
+          return if connection.nil?
+          connection.trigger event
+        end
+      end.resume
     end
 
     def shutdown!
