@@ -74,7 +74,7 @@ module WebsocketRails
       end
 
       def trigger(event)
-        log(:debug, "[Connection][Trigger] sending '#{event.data}' to #{@connection.inspect}")
+        log(:debug, "[Connection#trigger] event_name='#{event.name}' event_data='#{event.data}' connection='#{inspect}'")
         send "[#{event.serialize}]"
       end
 
