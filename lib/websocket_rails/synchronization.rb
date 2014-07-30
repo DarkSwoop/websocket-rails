@@ -43,7 +43,10 @@ module WebsocketRails
           connection = WebsocketRails.users[user_id]
           # don't do anything if the user isn't connected to this server
           if connection.is_a?(::WebsocketRails::UserManager::LocalConnection)
-            task.call(user_id, channel_name, connection)
+            # the user is connected to this server
+            connection.connections.each do |connection|
+              task.call(user_id, channel_name, connection)
+            end
             return true
           end
         end
