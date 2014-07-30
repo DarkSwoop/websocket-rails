@@ -3,6 +3,110 @@ require "redis"
 require "redis/connection/ruby"
 
 module WebsocketRails
+
+#  WebsocketRails::SyncTaskDefinition.define do
+#  
+#    task "channel.subscribe" do |user_id, channel_name, connection|
+#      # do custom stuff
+#      channel.subscribe connection
+#    end
+#  
+#    task "channel.unsubscribe" do |user_id, channel_name, connection|
+#      if channel_name.nil?
+#        WebsocketRails.channel_manager.unsubscribe(connection)
+#      else
+#        WebsocketRails[channel_name].unsubscribe(connection)
+#      end
+#    end
+#  
+#    task "connection.close" do |user_id, channel_name, connection|
+#      connection.close
+#    end
+#  
+#  end
+  class SyncTaskDefinition
+
+    class << self
+
+      def define &block
+        @tasks ||= {}
+        instance_eval &block
+      end
+
+      def task(name, &block)
+        @tasks[name] = block
+      end
+
+      def execute_task(name, user_id, channel_name)
+        task = @tasks[name]
+        if task
+          connection = WebsocketRails.users[user_id]
+          # don't do anything if the user isn't connected to this server
+          if connection.is_a?(::WebsocketRails::UserManager::LocalConnection)
+            task.call(user_id, channel_name, connection)
+            return true
+          end
+        end
+        false
+      end
+    end
+
+  end
+
+  class SyncTask
+
+    class << self
+
+      def new_from_json(json)
+        attributes = JSON.parse(json)
+        sync_task = new(attributes["name"], attributes["user_id"], attributes["channel_name"])
+        sync_task.server_token = attributes["server_token"]
+        sync_task
+      end
+
+      def sync(name, user_id, channel_name=nil)
+        sync_task = new(name, user_id, channel_name)
+        sync_task.execute
+      end
+
+    end
+
+    attr_accessor :server_token
+
+    # SyncTask.new("channel.subscribe", 1337, "room:123")
+    # SyncTask.new("channel.unsubscribe", 1337, "room:1")
+    # SyncTask.new("connection.close", 1337)
+    def initialize(name, user_id, channel_name)
+      @name         = name
+      @user_id      = user_id
+      @channel_name = channel_name
+    end
+
+    def execute
+      success = SyncTaskDefinition.execute_task(@name, @user_id, @channel_name)
+      publish unless success
+    end
+
+    def publish
+      Synchronization.sync(self)
+    end
+
+    def as_json
+      {
+        name: @name,
+        user_id: @user_id,
+        channel_name: @channel_name,
+        server_token: @server_token
+      }
+    end
+
+    def serialize
+      as_json.to_json
+    end
+
+  end
+
+
   class Synchronization
 
     def self.all_users
@@ -37,6 +141,10 @@ module WebsocketRails
       singleton.redis
     end
 
+    def self.sync(sync_task)
+      singleton.sync(sync_task)
+    end
+
     def self.singleton
       @singleton ||= new
     end
@@ -68,6 +176,13 @@ module WebsocketRails
       end.resume
     end
 
+    def sync(sync_task)
+      Fiber.new do
+        sync_task.server_token = server_token
+        redis.publish "websocket_rails.sync_tasks", sync_task.serialize
+      end.resume
+    end
+
     def server_token
       @server_token
     end
@@ -79,21 +194,31 @@ module WebsocketRails
 
         synchro = Fiber.new do
           fiber_redis = Redis.connect(WebsocketRails.config.redis_options)
-          fiber_redis.subscribe "websocket_rails.events" do |on|
+          fiber_redis.subscribe "websocket_rails.events", "websocket_rails.sync_tasks" do |on|
 
-            on.message do |_, encoded_event|
-              event = Event.new_from_json(encoded_event, nil)
+            on.message do |redis_channel, message|
+              if redis_channel == 'websocket_rails.events'
+                event = Event.new_from_json(message, nil)
 
-              # Do nothing if this is the server that sent this event.
-              next if event.server_token == server_token
+                # Do nothing if this is the server that sent this event.
+                next if event.server_token == server_token
 
-              # Ensure an event never gets triggered twice. Events added to the
-              # redis queue from other processes may not have a server token
-              # attached.
-              event.server_token = server_token if event.server_token.nil?
+                # Ensure an event never gets triggered twice. Events added to the
+                # redis queue from other processes may not have a server token
+                # attached.
+                event.server_token = server_token if event.server_token.nil?
 
-              trigger_incoming event
+                trigger_incoming event
+              elsif redis_channel == "websocket_rails.sync_tasks"
+                sync_task = SyncTask.new_from_json(message)
+
+                # Do nothing if this is the server that sent this sync task.
+                next if sync_task.server_token == server_token
+
+                sync_task.execute
+              end
             end
+
           end
 
           info "Beginning Synchronization"
