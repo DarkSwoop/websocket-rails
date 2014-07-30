@@ -50,7 +50,7 @@ module WebsocketRails
 
     def []=(identifier, connection)
       @users[identifier.to_s] ||= LocalConnection.new
-      @users[identifier.to_s] << connection
+      @users[identifier.to_s] << connection unless @users[identifier.to_s].connections.include?(connection)
       Synchronization.register_user(connection) if WebsocketRails.synchronize?
     end
 
