@@ -35,6 +35,8 @@ module WebsocketRails
 
   class UserManager
 
+    delegate :inject, to: :@users
+
     attr_reader :users
 
     def initialize
