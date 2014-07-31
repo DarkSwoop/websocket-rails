@@ -111,7 +111,7 @@ module WebsocketRails
       end
 
       def inspect
-        "#<Connection::#{id}>"
+        "#<Connection::#{id} user_identifier=#{user_identifier}>"
       end
 
       def to_s
