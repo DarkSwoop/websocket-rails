@@ -37,19 +37,29 @@ module WebsocketRails
         @tasks[name] = block
       end
 
-      def execute_task(name, user_id, channel_name)
+      def execute_task(name, options={})
         task = @tasks[name]
         if task
-          connection = WebsocketRails.users[user_id]
-          # don't do anything if the user isn't connected to this server
-          if connection.is_a?(::WebsocketRails::UserManager::LocalConnection)
-            # the user is connected to this server
-            connection.connections.each do |connection|
-              task.call(user_id, channel_name, connection)
+
+          # if a user_id is present we assume that we should perform the task using the active user websocket connections. A missing user_id indicates a server command. This may be used for maintenance tasks.
+          if user_id = options["user_id"]
+            connection = WebsocketRails.users[user_id]
+
+            # don't do anything if the user isn't connected to this server
+            if connection.is_a?(::WebsocketRails::UserManager::LocalConnection)
+              # the user is connected to this server
+              connection.connections.each do |connection|
+                task.call(user_id, channel_name, connection)
+              end
+              return true
             end
+          else
+            # the task seems to be a server maintenance task. just call it with the options.
+            task.call(options)
             return true
           end
         end
+        # no task no fun. do nothing.
         false
       end
     end
@@ -62,32 +72,31 @@ module WebsocketRails
 
       def new_from_json(json)
         attributes = JSON.parse(json)
-        sync_task = new(attributes["name"], attributes["user_id"], attributes["channel_name"])
+        sync_task = new(attributes["name"], attributes["options"])
         sync_task.server_token = attributes["server_token"]
         sync_task
       end
 
-      def sync(name, user_id, channel_name=nil)
-        sync_task = new(name, user_id, channel_name)
-        sync_task.execute
+      def sync(name, options={})
+        sync_task = new(name, options)
+        sync_task.publish
       end
 
     end
 
     attr_accessor :server_token
+    attr_reader :name
 
     # SyncTask.new("channel.subscribe", 1337, "room:123")
     # SyncTask.new("channel.unsubscribe", 1337, "room:1")
     # SyncTask.new("connection.close", 1337)
-    def initialize(name, user_id, channel_name)
+    def initialize(name, options={})
       @name         = name
-      @user_id      = user_id
-      @channel_name = channel_name
+      @options      = options || {}
     end
 
     def execute
-      success = SyncTaskDefinition.execute_task(@name, @user_id, @channel_name)
-      publish unless success
+      SyncTaskDefinition.execute_task(@name, @options)
     end
 
     def publish
@@ -97,8 +106,7 @@ module WebsocketRails
     def as_json
       {
         name: @name,
-        user_id: @user_id,
-        channel_name: @channel_name,
+        options: @options,
         server_token: @server_token
       }
     end
