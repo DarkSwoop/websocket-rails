@@ -49,7 +49,7 @@ module WebsocketRails
             if connection.is_a?(::WebsocketRails::UserManager::LocalConnection)
               # the user is connected to this server
               connection.connections.each do |connection|
-                task.call(user_id, channel_name, connection)
+                task.call(user_id, options['channel_name'], connection)
               end
               return true
             end
